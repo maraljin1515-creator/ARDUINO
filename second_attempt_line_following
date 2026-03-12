@@ -1,0 +1,244 @@
+// =====================================================
+// SIMPLE WHITE LINE FOLLOWER
+// Based on your motorA() / motorB() motor code
+// white = 1, black = 0
+// Sensor order: LEFT -> RIGHT = A5 A4 A3 A2 A1
+// =====================================================
+
+// ---------------- L298N pins ----------------
+const int ENA = 5;   // PWM
+const int IN1 = 8;
+const int IN2 = 9;
+
+const int ENB = 6;   // PWM
+const int IN3 = 10;
+const int IN4 = 11;
+
+// ---------------- Sensor pins ----------------
+// LEFT -> RIGHT
+const byte sensorPins[5] = {A5, A4, A3, A2, A1};
+
+// ---------------- Settings ----------------
+const int THRESHOLD = 500;   // black ~10, white ~980+
+
+// Straight speed
+int speedA_straight = 120;
+int speedB_straight = 120; // 130->120
+
+// Turn speed
+int speedA_turn = 140;
+int speedB_turn = 150;
+
+// Recover speed
+int recoverA = 110;
+int recoverB = 120;
+
+// ---------------- Variables ----------------
+int sensorRaw[5];
+int white[5];   // white=1, black=0
+
+int lastDirection = 0;
+// -1 = line was last on left
+//  1 = line was last on right
+//  0 = center / unknown
+
+// =====================================================
+
+void setup() {
+  Serial.begin(9600);
+
+  pinMode(ENA, OUTPUT);
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+
+  pinMode(ENB, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+
+  for (int i = 0; i < 5; i++) {
+    pinMode(sensorPins[i], INPUT);
+  }
+
+  stopMotors();
+}
+
+// =====================================================
+
+void loop() {
+  readSensors();
+  printPattern();
+
+  // 00100 or wide center -> straight
+  if (isPattern(0, 0, 1, 0, 0) || isPattern(0, 1, 1, 1, 0)) {
+    lastDirection = 0;
+    forwardStraight();
+  }
+
+  // Left side patterns
+  else if (
+    isPattern(0, 1, 0, 0, 0) ||
+    isPattern(0, 1, 1, 0, 0) ||
+    isPattern(1, 0, 0, 0, 0) ||
+    isPattern(1, 1, 0, 0, 0) 
+    
+  ) {
+    lastDirection = -1;
+    turnLeftSoft();
+  }
+
+  // Right side patterns
+  else if (
+    isPattern(0, 0, 0, 1, 0) ||
+    isPattern(0, 0, 1, 1, 0) ||
+    isPattern(0, 0, 0, 0, 1) ||
+    isPattern(0, 0, 0, 1, 1) 
+    
+  ) {
+    lastDirection = 1;
+    turnRightSoft();
+  }
+
+  // 00000 -> line lost -> recover
+  else if (isPattern(0, 0, 0, 0, 0)) {
+    recoverLine();
+  }
+
+  // 11111 -> intersection
+  else if (isPattern(1, 1, 1, 1, 1)) {
+    turnRightSoft();
+  }
+
+  // other uncommon patterns
+  else {
+    forwardStraight();
+  }
+
+  delay(20);
+}
+
+// =====================================================
+// SENSOR
+// =====================================================
+
+void readSensors() {
+  for (int i = 0; i < 5; i++) {
+    sensorRaw[i] = analogRead(sensorPins[i]);
+
+    if (sensorRaw[i] > THRESHOLD) {
+      white[i] = 1;
+    } else {
+      white[i] = 0;
+    }
+  }
+}
+
+bool isPattern(int s0, int s1, int s2, int s3, int s4) {
+  return (white[0] == s0 &&
+          white[1] == s1 &&
+          white[2] == s2 &&
+          white[3] == s3 &&
+          white[4] == s4);
+}
+
+// =====================================================
+// MOTOR FUNCTIONS
+// =====================================================
+
+void motorA(int speedVal, bool forward) {
+  digitalWrite(IN1, forward ? HIGH : LOW);
+  digitalWrite(IN2, forward ? LOW  : HIGH);
+  analogWrite(ENA, speedVal);
+}
+
+void motorB(int speedVal, bool forward) {
+  digitalWrite(IN3, forward ? HIGH : LOW);
+  digitalWrite(IN4, forward ? LOW  : HIGH);
+  analogWrite(ENB, speedVal);
+}
+
+void stopMotors() {
+  motorA(0, true);
+  motorB(0, true);
+}
+
+void reverseBoth(int speedA, int speedB) {
+  motorA(speedA, false);
+  motorB(speedB, false);
+}
+
+// =====================================================
+// MOVEMENT FUNCTIONS
+// =====================================================
+
+void forwardStraight() {
+  motorA(speedA_straight, true);
+  motorB(speedB_straight, true);
+}
+
+void turnLeftSoft() {
+  motorA(speedA_straight, true);
+  motorB(speedB_turn, true);
+}
+
+void turnLeftHard() {
+  motorA(speedA_straight, true);
+  motorB(0, true);
+}
+
+void turnRightSoft() {
+  motorA(speedA_turn, true);
+  motorB(speedB_straight, true);
+}
+
+void turnRightHard() {
+  motorA(0, true);
+  motorB(speedB_straight, true);
+}
+
+void recoverLine() {
+  // first go backward a little
+  reverseBoth(recoverA, recoverB);
+  delay(120);
+
+  // then search where line was last seen
+  if (lastDirection == -1) {
+    // search left
+    motorA(recoverA, false);
+    motorB(recoverB, true);
+  }
+  else if (lastDirection == 1) {
+    // search right
+    motorA(recoverA, true);
+    motorB(recoverB, false);
+  }
+  else {
+    // unknown
+    motorA(recoverA, true);
+    motorB(recoverB, false);
+  }
+}
+
+// =====================================================
+// DEBUG
+// =====================================================
+
+void printPattern() {
+  static unsigned long lastPrint = 0;
+  if (millis() - lastPrint < 100) return;
+  lastPrint = millis();
+
+  Serial.print("Raw: ");
+  for (int i = 0; i < 5; i++) {
+    Serial.print(sensorRaw[i]);
+    Serial.print(" ");
+  }
+
+  Serial.print("| Pattern: ");
+  for (int i = 0; i < 5; i++) {
+    Serial.print(white[i]);
+  }
+
+  Serial.print("| lastDir: ");
+  Serial.println(lastDirection);
+}
+
